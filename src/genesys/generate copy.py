@@ -84,12 +84,7 @@ def main(config: GenerateConfig):
     log("[bold green]✨ Setup complete! Starting generation...[/]")
 
     # Rest of the generation logic
-    sampling_params = dict(
-        temperature=config.temperature, 
-        top_p=config.top_p, 
-        max_new_tokens=config.max_tokens,
-        stop=["<search>", "</search>"]  # Add stop words here
-    )
+    sampling_params = dict(temperature=config.temperature, top_p=config.top_p, max_new_tokens=config.max_tokens)
     all_results = []
     total_samples = 0
 

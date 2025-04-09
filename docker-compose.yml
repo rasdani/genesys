@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - .:/root/genesys
+      - ~/.cache/huggingface:/root/.cache/huggingface
     working_dir: /root/genesys
     tty: true
     stdin_open: true
