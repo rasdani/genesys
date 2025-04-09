@@ -1,4 +1,5 @@
-FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
+# FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 LABEL maintainer="prime genesys"
 LABEL repository="genesys"
 
@@ -46,7 +47,7 @@ ENV PATH="/root/.local/bin/:$PATH"
 # Install Python dependencies (The gradual copies help with caching)
 WORKDIR /root/genesys
 
-
 COPY . .
 
-RUN uv sync --extra sglang --frozen
+# Install Python 3.12 using uv and create virtual environment
+RUN uv venv -p 3.12 .venv && . .venv/bin/activate && uv sync --extra sglang --frozen

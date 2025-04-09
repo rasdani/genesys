@@ -1,0 +1,14 @@
+# version: '3.8'
+
+services:
+  genesys:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/root/genesys
+    working_dir: /root/genesys
+    tty: true
+    stdin_open: true
+    runtime: nvidia
+    command: /bin/bash 
