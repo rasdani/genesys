@@ -18,7 +18,7 @@ class ReasoningGymVerifier(BaseVerifier):
 
     def verify(self, result: Response):
         """
-        Evaluates the answer with the corresponding scoring function from reasoning gym.
+        Evaluates the answer with the scoring function from the corresponding reasoning gym dataset.
 
         The score is a float between 0 and 1.
         """
