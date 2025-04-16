@@ -11,8 +11,10 @@ class ReasoningGymVerifier(BaseVerifier):
     """
 
     def __init__(self):
-        del DATASETS["composite"]  # TODO: remove this once the composite dataset is fixed
-        self.score_answer_fns = { dataset_name: create_dataset(name=dataset_name, size=1).score_answer for dataset_name in DATASETS.keys() }
+        del DATASETS["composite"]
+        self.score_answer_fns = {
+            dataset_name: create_dataset(name=dataset_name, size=1).score_answer for dataset_name in DATASETS.keys()
+        }
 
     def verify(self, result: Response):
         """
