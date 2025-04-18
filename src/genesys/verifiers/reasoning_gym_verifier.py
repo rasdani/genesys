@@ -1,4 +1,4 @@
-from reasoning_gym.factory import DATASETS, create_dataset
+from reasoning_gym.factory import DATASETS, get_score_answer_fn
 
 from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
@@ -13,7 +13,7 @@ class ReasoningGymVerifier(BaseVerifier):
     def __init__(self):
         del DATASETS["composite"]
         self.score_answer_fns = {
-            dataset_name: create_dataset(name=dataset_name, size=1).score_answer for dataset_name in DATASETS.keys()
+            dataset_name: get_score_answer_fn(name=dataset_name) for dataset_name in DATASETS.keys()
         }
 
     def verify(self, result: Response):
