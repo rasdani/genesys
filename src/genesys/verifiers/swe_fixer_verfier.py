@@ -9,9 +9,10 @@ from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
 
 
-def parse_json_codeblock_from_reasoning_model_output(markdown_str):
-    _, answer_str = markdown_str.split("</think>")
-    answer_str = answer_str.strip()
+def parse_json_codeblock_from_model_output(markdown_str):
+    # Get everything after </think>, if it exists
+    match = re.search(r"</think>(.*?)$", markdown_str, re.DOTALL)
+    answer_str = match.group(1).strip() if match else markdown_str.strip()
     # Extract everything between ```json and ``` markers
     match = re.search(r"```json\s*(.*?)\s*```", answer_str, re.DOTALL)
     if match:
@@ -41,6 +42,7 @@ def check_syntax(code):
 
 
 def check_code_differ_by_just_empty_lines(code, prev_code):
+    breakpoint()
     normalized_code1 = remove_empty_lines(code)
     normalized_code2 = remove_empty_lines(prev_code)
     return normalized_code1 == normalized_code2
@@ -53,29 +55,29 @@ class SweFixerVerifier(BaseVerifier):
     """
 
 
-    def _patch_files_with_golden_patches(self, task_input):
+    def _patch_files_with_golden_patches(self, verification_info):
         """
-        Patch files with golden patches from the task input.
-        This creates patched files using the ground truth patches for reference.
+        Create ground truth files by patching with golden patches from the original dataset's output.
         
         Args:
-            task_input: Dictionary containing task input data with modification instructions
+            verification_info: Dictionary containing verification info with modification instructions
             
         Returns:
-            dict: Dictionary with file paths as keys and patched contents as values
+            List of dictionaries with file paths and patched contents
         """
-        patched_files = {}
+        patched_files = []
         
         try:
-            # Extract files to be modified from task input
-            files_to_modify = task_input["metadata"]["input"]["files to be modified"]
+            # Get files to be modified from input
+            files_to_modify = verification_info["input"]["files to be modified"]
+            breakpoint()
             
             for file_info in files_to_modify:
                 file_path = file_info["file"]
                 file_content = remove_line_numbers(file_info["file content"])
                 
-                # Find the golden patch information from the task input
-                golden_patches = task_input.get("verification_info", {}).get("golden_patches", [])
+                # Get golden patches from output
+                golden_patches = verification_info["output"]["edited code"]
                 
                 for patch in golden_patches:
                     if patch["file"] == file_path:
@@ -83,41 +85,40 @@ class SweFixerVerifier(BaseVerifier):
                             patch["code snippet to be modified"]
                         ).rstrip()
                         
-                        correct_code_snippet = remove_line_numbers(
-                            patch["correct code snippet"]
-                        ).rstrip()
+                        edited_code_snippet = patch["edited code snippet"]
                         
                         # Apply the golden patch if the snippet is found in the file
                         if code_snippet_to_be_modified and code_snippet_to_be_modified in file_content:
                             new_content = file_content.replace(
-                                code_snippet_to_be_modified, correct_code_snippet
+                                code_snippet_to_be_modified, edited_code_snippet
                             )
-                            patched_files[file_path] = new_content
+                            patched_files.append({
+                                "file": file_path,
+                                "file content": new_content
+                            })
                         elif file_content == "":  # Handle new file case
-                            patched_files[file_path] = correct_code_snippet
+                            patched_files.append({
+                                "file": file_path,
+                                "file content": edited_code_snippet
+                            })
             
             return patched_files
                 
         except Exception as e:
             print(f"Error in patching files with golden patches: {e}")
-            return {}
+            return []
 
-    def evaluate_task_code_editing(self, task_input, json_output):
+    def evaluate_task_code_editing(self, verification_info, json_output):
         try:
-            output = json.loads(json_output)
-            files = output
+            files = json.loads(json_output)
         except Exception as e:
-            # logger.error(f"Error in parsing json output for task code editing: {e}")
-            # print(f"Error in parsing json output for task code editing: {e}")
-            print(f"EXCEPTION: {e}")
+            from pprint import pprint
+            pprint("Verification info: ", verification_info)
+            pprint("JSON output: ", json_output)
+            raise e
             return "", ""
         try:
-            git_diffs = ""
-            raw_git_diffs = ""
-            lint_success = False
-
             for file in files:
-                # file_path = file["file path"]
                 file_path = file["file"]
                 code_snippet_to_be_modified = file["code snippet to be modified"]
                 edited_code_snippet = file["edited code snippet"]
@@ -127,9 +128,10 @@ class SweFixerVerifier(BaseVerifier):
                 ).rstrip()
 
                 file_content = ""
-                for f in task_input["metadata"]["input"]["files to be modified"]:
-                    if f["file"] == file_path:
-                        file_content = remove_line_numbers(f["file content"])
+                patched_files = self._patch_files_with_golden_patches(verification_info)
+                for patched_file in patched_files:
+                    if patched_file["file"] == file_path:
+                        file_content = patched_file["file content"]
                         break
 
                 if (
@@ -145,11 +147,11 @@ class SweFixerVerifier(BaseVerifier):
 
                     syntax_success = check_syntax(new_content)
 
-                    differ_by_empty_lines = check_code_differ_by_just_empty_lines(
+                    differ_by_just_empty_lines = check_code_differ_by_just_empty_lines(
                         new_content, file_content
                     )
 
-                    if syntax_success and not differ_by_empty_lines:
+                    if syntax_success and differ_by_just_empty_lines:
                         return dict(score=1, verification_result_info={})
                     else:
                         return dict(score=0, verification_result_info={})
@@ -168,9 +170,9 @@ class SweFixerVerifier(BaseVerifier):
         """
 
         verification_info = result["verification_info"]
-        json_output = parse_json_codeblock_from_reasoning_model_output(result["llm_response"])
+        json_output = parse_json_codeblock_from_model_output(result["llm_response"])
 
-        return self.evaluate_task_code_editing(verification_info["input"], json_output)
+        return self.evaluate_task_code_editing(verification_info, json_output)
 
 
 if __name__ == "__main__":
