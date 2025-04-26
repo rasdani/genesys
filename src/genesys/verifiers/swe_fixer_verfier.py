@@ -42,10 +42,46 @@ def check_syntax(code):
 
 
 def check_code_differ_by_just_empty_lines(code, prev_code):
-    breakpoint()
     normalized_code1 = remove_empty_lines(code)
     normalized_code2 = remove_empty_lines(prev_code)
     return normalized_code1 == normalized_code2
+
+
+def apply_patches(files_to_modify, patches):
+    """
+    Apply a list of code-edit patches to an iterable of files and return the
+    fully-patched workspace.
+
+    Args:
+        files_to_modify (list[dict]): items from verification_info["input"]["files to be modified"]
+        patches (list[dict]): items structured like verification_info["output"]["edited code"]
+                              or the model's JSON output.
+
+    Returns
+    -------
+    dict[str, str]
+        file-path -> patched file content
+    """
+    # 1. start with the unmodified text for every file
+    file_map = {f["file"]: remove_line_numbers(f["file content"])
+                for f in files_to_modify}
+
+    # 2. iteratively apply every patch, mutating the working copy
+    for patch in patches:
+        file_path = patch["file"]
+        snippet_old = remove_line_numbers(
+            patch["code snippet to be modified"]
+        ).rstrip()
+        snippet_new = patch["edited code snippet"]
+
+        current = file_map.get(file_path, "")
+        if snippet_old and snippet_old in current:
+            current = current.replace(snippet_old, snippet_new)
+        elif current == "":           # brand-new file
+            current = snippet_new
+        file_map[file_path] = current
+
+    return file_map
 
 
 class SweFixerVerifier(BaseVerifier):
@@ -54,113 +90,43 @@ class SweFixerVerifier(BaseVerifier):
     https://github.com/InternLM/SWE-Fixer
     """
 
-
-    def _patch_files_with_golden_patches(self, verification_info):
-        """
-        Create ground truth files by patching with golden patches from the original dataset's output.
-        
-        Args:
-            verification_info: Dictionary containing verification info with modification instructions
-            
-        Returns:
-            List of dictionaries with file paths and patched contents
-        """
-        patched_files = []
-        
-        try:
-            # Get files to be modified from input
-            files_to_modify = verification_info["input"]["files to be modified"]
-            breakpoint()
-            
-            for file_info in files_to_modify:
-                file_path = file_info["file"]
-                file_content = remove_line_numbers(file_info["file content"])
-                
-                # Get golden patches from output
-                golden_patches = verification_info["output"]["edited code"]
-                
-                for patch in golden_patches:
-                    if patch["file"] == file_path:
-                        code_snippet_to_be_modified = remove_line_numbers(
-                            patch["code snippet to be modified"]
-                        ).rstrip()
-                        
-                        edited_code_snippet = patch["edited code snippet"]
-                        
-                        # Apply the golden patch if the snippet is found in the file
-                        if code_snippet_to_be_modified and code_snippet_to_be_modified in file_content:
-                            new_content = file_content.replace(
-                                code_snippet_to_be_modified, edited_code_snippet
-                            )
-                            patched_files.append({
-                                "file": file_path,
-                                "file content": new_content
-                            })
-                        elif file_content == "":  # Handle new file case
-                            patched_files.append({
-                                "file": file_path,
-                                "file content": edited_code_snippet
-                            })
-            
-            return patched_files
-                
-        except Exception as e:
-            print(f"Error in patching files with golden patches: {e}")
-            return []
-
     def evaluate_task_code_editing(self, verification_info, json_output):
         try:
-            files = json.loads(json_output)
+            model_patches = json.loads(json_output)
         except Exception as e:
             from pprint import pprint
             pprint("Verification info: ", verification_info)
             pprint("JSON output: ", json_output)
             raise e
-            return "", ""
+
         try:
-            for file in files:
-                file_path = file["file"]
-                code_snippet_to_be_modified = file["code snippet to be modified"]
-                edited_code_snippet = file["edited code snippet"]
+            original_files = verification_info["input"]["files to be modified"]
+            golden_patches = verification_info["output"]["edited code"]
 
-                code_snippet_to_be_modified = remove_line_numbers(
-                    code_snippet_to_be_modified
-                ).rstrip()
+            expected_ws  = apply_patches(original_files, golden_patches)
+            predicted_ws = apply_patches(original_files, model_patches)
 
-                file_content = ""
-                patched_files = self._patch_files_with_golden_patches(verification_info)
-                for patched_file in patched_files:
-                    if patched_file["file"] == file_path:
-                        file_content = patched_file["file content"]
-                        break
+            
 
-                if (
-                    code_snippet_to_be_modified
-                    and code_snippet_to_be_modified in file_content
-                ) or file_content == "":
-                    if file_content:
-                        new_content = file_content.replace(
-                            code_snippet_to_be_modified, edited_code_snippet
-                        )
-                    else:  # new file
-                        new_content = edited_code_snippet
+            for path in expected_ws:
+                expected_code  = expected_ws[path]
+                predicted_code = predicted_ws.get(path, "")
 
-                    syntax_success = check_syntax(new_content)
-
-                    differ_by_just_empty_lines = check_code_differ_by_just_empty_lines(
-                        new_content, file_content
-                    )
-
-                    if syntax_success and differ_by_just_empty_lines:
-                        return dict(score=1, verification_result_info={})
-                    else:
-                        return dict(score=0, verification_result_info={})
-                else:
+                syntax_ok = check_syntax(predicted_code)
+                differs_by_just_empty_lines = check_code_differ_by_just_empty_lines(predicted_code, expected_code)
+                if not syntax_ok or not differs_by_just_empty_lines:
                     return dict(score=0, verification_result_info={})
 
+            return dict(score=1, verification_result_info={})
+
+
         except Exception as e:
-            breakpoint()
-            return dict(score=0, verification_result_info={"failure_reason": "Error in evaluating task code editing for instance {instance_id}: {e}"})
+            return dict(
+                score=0,
+                verification_result_info={
+                    "failure_reason": f"Error in evaluating task code editing: {e}"
+                },
+            )
 
     def verify(self, result: Response):
         """
