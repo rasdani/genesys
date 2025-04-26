@@ -3,7 +3,7 @@ import json
 import re
 import ast
 import argparse
-import difflib
+import cydifflib
 from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
 
@@ -40,14 +40,14 @@ def check_syntax(code):
     return True
 
 
-def check_code_differ_by_just_empty_lines(code, prev_code):
+def differs_by_just_empty_lines(code, prev_code):
     normalized_code1 = remove_empty_lines(code)
     normalized_code2 = remove_empty_lines(prev_code)
     return normalized_code1 == normalized_code2
 
 def color_print_diff(code, prev_code):
     # Create a differ object
-    differ = difflib.Differ()
+    differ = cydifflib.Differ()
     
     # Split both codes into lines
     code_lines = code.splitlines()
@@ -115,10 +115,9 @@ class SweFixerVerifier(BaseVerifier):
         try:
             model_patches = json.loads(json_output)
         except Exception as e:
-            from pprint import pprint
-            pprint("Verification info: ", verification_info)
-            pprint("JSON output: ", json_output)
-            raise e
+            return dict(score=0.0, verification_result_info={
+                "failure_reason": f"Error in parsing JSON output: {e}"
+            })
 
         try:
             original_files = verification_info["input"]["files to be modified"]
@@ -135,26 +134,28 @@ class SweFixerVerifier(BaseVerifier):
                 expected_code  = expected_ws[path]
                 predicted_code = predicted_ws.get(path, "")
 
+                if predicted_code == expected_code or differs_by_just_empty_lines(predicted_code, expected_code):
+                    scores.append(1.0)
+                    continue
+
+
                 syntax_ok = check_syntax(predicted_code)
-                differs_by_just_empty_lines = check_code_differ_by_just_empty_lines(predicted_code, expected_code)
-                # if not syntax_ok or not differs_by_just_empty_lines:
                 if not syntax_ok:
                     # color_print_diff(predicted_code, expected_code)
-                    return dict(score=0, verification_result_info={
+                    return dict(score=0.0, verification_result_info={
                         "failure_reason": "Syntax error"
                     })
                 
-                change_similarity = difflib.SequenceMatcher(
+                score = cydifflib.SequenceMatcher(
                     None,
-                    predicted_code,
-                    expected_code,
+                    a=predicted_code,
+                    b=expected_code,
                     autojunk=False,
                 ).ratio()
-                scores.append(change_similarity)
+                scores.append(score)
                 
-            avg_score = sum(scores) / len(scores)
 
-            return dict(score=avg_score, verification_result_info=dict())
+            return dict(score=sum(scores) / len(scores), verification_result_info=dict())
 
 
         except Exception as e:
