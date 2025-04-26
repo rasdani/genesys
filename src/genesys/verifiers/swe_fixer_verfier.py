@@ -1,10 +1,9 @@
 ### adapted from https://github.com/InternLM/SWE-Fixer/blob/main/evaluation/code_edit.py
 import json
-import os
 import re
 import ast
 import argparse
-
+import difflib
 from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
 
@@ -45,6 +44,28 @@ def check_code_differ_by_just_empty_lines(code, prev_code):
     normalized_code1 = remove_empty_lines(code)
     normalized_code2 = remove_empty_lines(prev_code)
     return normalized_code1 == normalized_code2
+
+def color_print_diff(code, prev_code):
+    # Create a differ object
+    differ = difflib.Differ()
+    
+    # Split both codes into lines
+    code_lines = code.splitlines()
+    prev_code_lines = prev_code.splitlines()
+    
+    # Get the diff
+    diff = list(differ.compare(prev_code_lines, code_lines))
+    
+    # Print the diff with colors
+    for line in diff:
+        if line.startswith('+'):
+            print('\033[92m' + line + '\033[0m')  # Green for additions
+        elif line.startswith('-'):
+            print('\033[91m' + line + '\033[0m')  # Red for deletions
+        elif line.startswith('?'):
+            continue  # Skip the hints
+        else:
+            print(line)  # Normal color for unchanged lines
 
 
 def apply_patches(files_to_modify, patches):
@@ -105,19 +126,35 @@ class SweFixerVerifier(BaseVerifier):
 
             expected_ws  = apply_patches(original_files, golden_patches)
             predicted_ws = apply_patches(original_files, model_patches)
+            # predicted_ws = apply_patches(original_files, golden_patches)
 
             
 
+            scores = []
             for path in expected_ws:
                 expected_code  = expected_ws[path]
                 predicted_code = predicted_ws.get(path, "")
 
                 syntax_ok = check_syntax(predicted_code)
                 differs_by_just_empty_lines = check_code_differ_by_just_empty_lines(predicted_code, expected_code)
-                if not syntax_ok or not differs_by_just_empty_lines:
-                    return dict(score=0, verification_result_info={})
+                # if not syntax_ok or not differs_by_just_empty_lines:
+                if not syntax_ok:
+                    # color_print_diff(predicted_code, expected_code)
+                    return dict(score=0, verification_result_info={
+                        "failure_reason": "Syntax error"
+                    })
+                
+                change_similarity = difflib.SequenceMatcher(
+                    None,
+                    predicted_code,
+                    expected_code,
+                    autojunk=False,
+                ).ratio()
+                scores.append(change_similarity)
+                
+            avg_score = sum(scores) / len(scores)
 
-            return dict(score=1, verification_result_info={})
+            return dict(score=avg_score, verification_result_info=dict())
 
 
         except Exception as e:
