@@ -8,6 +8,9 @@ from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
 
 
+LINE_NUMBER_REGEX = re.compile(r"^\d+\s", re.MULTILINE)
+
+
 def parse_json_codeblock_from_model_output(markdown_str):
     # Get everything after </think>, if it exists
     match = re.search(r"</think>(.*?)$", markdown_str, re.DOTALL)
@@ -19,16 +22,13 @@ def parse_json_codeblock_from_model_output(markdown_str):
     else:
         return answer_str.strip()
 
-
 def remove_line_numbers(content):
-    # Remove line numbers from the file content
-    return re.sub(r"^\d+\s", "", content, flags=re.MULTILINE)
+    return LINE_NUMBER_REGEX.sub("", content)
 
 def remove_empty_lines(code):
     lines = code.splitlines()
     filtered_lines = [line for line in lines if line.strip() != ""]
     return "\n".join(filtered_lines)
-
 
 def check_syntax(code):
     if not code.strip():
@@ -39,70 +39,16 @@ def check_syntax(code):
         return False
     return True
 
-
-def differs_by_just_empty_lines(code, prev_code):
-    normalized_code1 = remove_empty_lines(code)
-    normalized_code2 = remove_empty_lines(prev_code)
-    return normalized_code1 == normalized_code2
-
-def color_print_diff(code, prev_code):
-    # Create a differ object
-    differ = cydifflib.Differ()
-    
-    # Split both codes into lines
-    code_lines = code.splitlines()
-    prev_code_lines = prev_code.splitlines()
-    
-    # Get the diff
-    diff = list(differ.compare(prev_code_lines, code_lines))
-    
-    # Print the diff with colors
+def print_unified_diff(code, prev_code):
+    diff = list(cydifflib.unified_diff(prev_code.splitlines(), code.splitlines(), 
+                                     fromfile='before', tofile='after', lineterm=''))
     for line in diff:
         if line.startswith('+'):
             print('\033[92m' + line + '\033[0m')  # Green for additions
-        elif line.startswith('-'):
+        elif line.startswith('-'): 
             print('\033[91m' + line + '\033[0m')  # Red for deletions
-        elif line.startswith('?'):
-            continue  # Skip the hints
         else:
-            print(line)  # Normal color for unchanged lines
-
-
-def apply_patches(files_to_modify, patches):
-    """
-    Apply a list of code-edit patches to an iterable of files and return the
-    fully-patched workspace.
-
-    Args:
-        files_to_modify (list[dict]): items from verification_info["input"]["files to be modified"]
-        patches (list[dict]): items structured like verification_info["output"]["edited code"]
-                              or the model's JSON output.
-
-    Returns
-    -------
-    dict[str, str]
-        file-path -> patched file content
-    """
-    # 1. start with the unmodified text for every file
-    file_map = {f["file"]: remove_line_numbers(f["file content"])
-                for f in files_to_modify}
-
-    # 2. iteratively apply every patch, mutating the working copy
-    for patch in patches:
-        file_path = patch["file"]
-        snippet_old = remove_line_numbers(
-            patch["code snippet to be modified"]
-        ).rstrip()
-        snippet_new = patch["edited code snippet"]
-
-        current = file_map.get(file_path, "")
-        if snippet_old and snippet_old in current:
-            current = current.replace(snippet_old, snippet_new)
-        elif current == "":           # brand-new file
-            current = snippet_new
-        file_map[file_path] = current
-
-    return file_map
+            print(line)  # Context lines
 
 
 class SweFixerVerifier(BaseVerifier):
@@ -110,6 +56,92 @@ class SweFixerVerifier(BaseVerifier):
     Verifier for the SWE-Fixer dataset.
     https://github.com/InternLM/SWE-Fixer
     """
+
+    def apply_patches(self, files_to_modify, patches):
+        """
+        Apply a list of code-edit patches to an iterable of files and return the
+        fully-patched workspace.
+
+        Args:
+            files_to_modify (list[dict]): items from verification_info["input"]["files to be modified"]
+            patches (list[dict]): items structured like verification_info["output"]["edited code"]
+                                or the model's JSON output.
+
+        Returns
+        -------
+        dict[str, str]
+            file-path -> patched file content
+        """
+        file_map = {f["file"]: remove_line_numbers(f["file content"])
+                    for f in files_to_modify}
+
+        for patch in patches:
+            file_path = patch["file"]
+            snippet_old = remove_line_numbers(
+                patch["code snippet to be modified"]
+            ).rstrip()
+            snippet_new = patch["edited code snippet"]
+
+            current = file_map.get(file_path, "")
+            if snippet_old and snippet_old in current:
+                current = current.replace(snippet_old, snippet_new)
+            elif current == "":           # brand-new file
+                current = snippet_new
+            file_map[file_path] = current
+
+        return file_map
+
+
+    def exctract_code_regions(self, expected_code, predicted_code, model_patches, window=3):
+        """
+        Extract the code regions modified by the model.
+        
+        Args:
+            expected_code: The reference/target code
+            predicted_code: The code generated by the model
+            model_patches: List of dictionaries with "edited code snippet" and "code snippet to be modified"
+            window: Number of extra characters to include around each modification
+            
+        Returns:
+            Tuple of (expected_code, predicted_code) with only the modified regions
+        """
+        matching_regions = []  # list[(expected_start, expected_end, predicted_start, predicted_end)]
+        
+        for patch in model_patches:
+            old_code = patch["code snippet to be modified"]
+            new_code = patch["edited code snippet"]
+            
+            pred_start = predicted_code.find(new_code)
+            if pred_start == -1:
+                continue
+            pred_end = pred_start + len(new_code)
+            
+            expected_start = expected_code.find(old_code)
+            if expected_start == -1:
+                # Fallback: use same position as in predicted file if possible
+                expected_start = pred_start if pred_start < len(expected_code) else None
+                if expected_start is None:
+                    continue
+            expected_end = expected_start + len(old_code)
+            
+            # Expand regions by window size while respecting file boundaries
+            expected_start = max(0, expected_start - window)
+            expected_end = min(len(expected_code), expected_end + window)
+            pred_start = max(0, pred_start - window)
+            pred_end = min(len(predicted_code), pred_end + window)
+            
+            matching_regions.append((expected_start, expected_end, pred_start, pred_end))
+        
+        if not matching_regions:
+            return expected_code, predicted_code
+        
+        pred_sections = [predicted_code[start:end] for start, end, _, _ in matching_regions]
+        expected_sections = [expected_code[start:end] for _, _, start, end in matching_regions]
+        
+        joined_pred = "\n".join(pred_sections)
+        joined_expected = "\n".join(expected_sections)
+        
+        return joined_expected, joined_pred
 
     def evaluate_task_code_editing(self, verification_info, json_output):
         try:
@@ -123,8 +155,10 @@ class SweFixerVerifier(BaseVerifier):
             original_files = verification_info["input"]["files to be modified"]
             golden_patches = verification_info["output"]["edited code"]
 
-            expected_ws  = apply_patches(original_files, golden_patches)
-            predicted_ws = apply_patches(original_files, model_patches)
+            # print("PATCHING GOLDEN PATCHES")
+            expected_ws  = self.apply_patches(original_files, golden_patches)
+            # print("PATCHING MODEL PATCHES")
+            predicted_ws = self.apply_patches(original_files, model_patches)
             # predicted_ws = apply_patches(original_files, golden_patches)
 
             
@@ -133,8 +167,10 @@ class SweFixerVerifier(BaseVerifier):
             for path in expected_ws:
                 expected_code  = expected_ws[path]
                 predicted_code = predicted_ws.get(path, "")
+                expected_code = remove_empty_lines(expected_code)
+                predicted_code = remove_empty_lines(predicted_code)
 
-                if predicted_code == expected_code or differs_by_just_empty_lines(predicted_code, expected_code):
+                if predicted_code == expected_code:
                     scores.append(1.0)
                     continue
 
@@ -146,6 +182,7 @@ class SweFixerVerifier(BaseVerifier):
                         "failure_reason": "Syntax error"
                     })
                 
+                expected_code, predicted_code = self.exctract_code_regions(expected_code, predicted_code, model_patches)
                 score = cydifflib.SequenceMatcher(
                     None,
                     a=predicted_code,
@@ -173,10 +210,17 @@ class SweFixerVerifier(BaseVerifier):
         The score is either 0 or 1, representing whether the patches are correct.
         """
 
+        print("Processing example: ", result["problem_id"])
         verification_info = result["verification_info"]
         json_output = parse_json_codeblock_from_model_output(result["llm_response"])
 
-        return self.evaluate_task_code_editing(verification_info, json_output)
+        import time
+        start_time = time.time()
+        ret = self.evaluate_task_code_editing(verification_info, json_output)
+        end_time = time.time()
+        print(f"Time taken: {end_time - start_time} seconds")
+        return ret
+
 
 
 if __name__ == "__main__":
