@@ -114,8 +114,9 @@ class SweFixerVerifier(BaseVerifier):
             # breakpoint()
             old_code = patch["code snippet to be modified"]
             new_code = patch["edited code snippet"]
-            # old_code = remove_empty_lines(old_code)
-            # new_code = remove_empty_lines(new_code)
+            old_code = remove_empty_lines(old_code)
+            new_code = remove_empty_lines(new_code)
+            old_code = remove_line_numbers(old_code)
             
             pred_text = "\n".join(predicted_lines)
             pred_start_char = pred_text.find(new_code)
@@ -184,8 +185,8 @@ class SweFixerVerifier(BaseVerifier):
             for path in expected_workspace:
                 expected_file_content  = expected_workspace[path]
                 predicted_file_content = predicted_workspace.get(path, "")
-                # expected_file_content = remove_empty_lines(expected_file_content)
-                # predicted_file_content = remove_empty_lines(predicted_file_content)
+                expected_file_content = remove_empty_lines(expected_file_content)
+                predicted_file_content = remove_empty_lines(predicted_file_content)
 
                 if predicted_file_content == expected_file_content:
                     scores.append(1.0)
