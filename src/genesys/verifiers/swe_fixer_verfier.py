@@ -74,6 +74,7 @@ class SweFixerVerifier(BaseVerifier):
         """
         file_map = {f["file"]: remove_line_numbers(f["file content"])
                     for f in files_to_modify}
+        failed_file_paths = []
 
         for patch in patches:
             file_path = patch["file"]
@@ -83,16 +84,21 @@ class SweFixerVerifier(BaseVerifier):
             snippet_new = patch["edited code snippet"]
 
             current = file_map.get(file_path, "")
-            if snippet_old and snippet_old in current:
+            if snippet_old:
+                if snippet_old not in current:
+                    print("Model failed to localize the code snippet to be modified")
+                    failed_file_paths.append(file_path)
+                    continue
                 current = current.replace(snippet_old, snippet_new)
             elif current == "":           # brand-new file
                 current = snippet_new
             file_map[file_path] = current
 
+        file_map = {k: None if k in failed_file_paths else v for k, v in file_map.items()}
         return file_map
 
 
-    def exctract_code_regions(self, expected_file_content, predicted_file_content, model_patches, window=3):
+    def exctract_code_regions(self, file_path, expected_workspace, predicted_workspace, model_patches, window=3):
         """
         Extract the code regions modified by the model.
         
@@ -107,10 +113,12 @@ class SweFixerVerifier(BaseVerifier):
         """
         matching_regions = []  # list[(expected_start, expected_end, predicted_start, predicted_end)]
         
-        expected_lines = expected_file_content.splitlines()
-        predicted_lines = predicted_file_content.splitlines()
+        expected_lines = expected_workspace[file_path].splitlines()
+        predicted_lines = predicted_workspace[file_path].splitlines()
+
+        model_patches_for_file = [patch for patch in model_patches if patch["file"] == file_path]
         
-        for patch in model_patches:
+        for patch in model_patches_for_file:
             # breakpoint()
             old_code = patch["code snippet to be modified"]
             new_code = patch["edited code snippet"]
@@ -151,7 +159,7 @@ class SweFixerVerifier(BaseVerifier):
             matching_regions.append((expected_start_line, expected_end_line, pred_start_line, pred_end_line))
         
         if len(matching_regions) != len(model_patches):
-            return expected_file_content, predicted_file_content
+            return expected_workspace[file_path], predicted_workspace[file_path]
         
         expected_sections = ['\n'.join(expected_lines[start:end]) for start, end, _, _ in matching_regions]
         pred_sections = ['\n'.join(predicted_lines[start:end]) for _, _, start, end in matching_regions]
@@ -177,14 +185,15 @@ class SweFixerVerifier(BaseVerifier):
             expected_workspace  = self.apply_patches(original_files, golden_patches)
             # print("PATCHING MODEL PATCHES")
             predicted_workspace = self.apply_patches(original_files, model_patches)
-            # predicted_ws = apply_patches(original_files, golden_patches)
-
-            
+            # predicted_workspace = self.apply_patches(original_files, golden_patches)
 
             scores = []
-            for path in expected_workspace:
-                expected_file_content  = expected_workspace[path]
-                predicted_file_content = predicted_workspace.get(path, "")
+            for file_path in expected_workspace:
+                if predicted_workspace[file_path] is None:
+                    scores.append(0.0)  # model failed to localize edit location
+                    continue
+                expected_file_content  = expected_workspace[file_path]
+                predicted_file_content = predicted_workspace.get(file_path, "")
                 expected_file_content = remove_empty_lines(expected_file_content)
                 predicted_file_content = remove_empty_lines(predicted_file_content)
 
@@ -200,7 +209,7 @@ class SweFixerVerifier(BaseVerifier):
                         "failure_reason": "Syntax error"
                     })
                 
-                expected_file_regions, predicted_file_regions = self.exctract_code_regions(expected_file_content, predicted_file_content, model_patches)
+                expected_file_regions, predicted_file_regions = self.exctract_code_regions(file_path, expected_workspace, predicted_workspace, model_patches)
                 # print left and right side by side
                 # print(predicted_file_regions)
                 # print("-"*100)
