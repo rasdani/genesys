@@ -4,11 +4,13 @@ import re
 import ast
 import argparse
 import cydifflib
+
 from genesys.schemas import Response
 from genesys.verifiers.base_verifier import BaseVerifier
 
 
 LINE_NUMBER_REGEX = re.compile(r"^\d+\s", re.MULTILINE)
+
 
 
 def parse_json_codeblock_from_model_output(markdown_str):
@@ -80,8 +82,8 @@ class SweFixerVerifier(BaseVerifier):
             file_path = patch["file"]
             snippet_old = remove_line_numbers(
                 patch["code snippet to be modified"]
-            ).rstrip()
-            snippet_new = patch["edited code snippet"]
+            ).strip()
+            snippet_new = patch["edited code snippet"].strip()
 
             current = file_map.get(file_path, "")
             if snippet_old:
@@ -96,6 +98,12 @@ class SweFixerVerifier(BaseVerifier):
 
         file_map = {k: None if k in failed_file_paths else v for k, v in file_map.items()}
         return file_map
+
+    def get_diff(self, before, after):
+        diff = cydifflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="")
+        lines = list(diff)[2:]
+        return "\n".join(lines)
+        
 
 
     def exctract_code_regions(self, file_path, expected_workspace, predicted_workspace, model_patches, window=3):
@@ -182,6 +190,7 @@ class SweFixerVerifier(BaseVerifier):
             golden_patches = verification_info["output"]["edited code"]
 
             # print("PATCHING GOLDEN PATCHES")
+            original_workspace = self.apply_patches(original_files, [])
             expected_workspace  = self.apply_patches(original_files, golden_patches)
             # print("PATCHING MODEL PATCHES")
             predicted_workspace = self.apply_patches(original_files, model_patches)
@@ -189,13 +198,15 @@ class SweFixerVerifier(BaseVerifier):
 
             scores = []
             for file_path in expected_workspace:
+                # if "pandas/core/frame.py" in file_path:
+                #     breakpoint()
                 if predicted_workspace[file_path] is None:
                     scores.append(0.0)  # model failed to localize edit location
                     continue
                 expected_file_content  = expected_workspace[file_path]
                 predicted_file_content = predicted_workspace.get(file_path, "")
-                expected_file_content = remove_empty_lines(expected_file_content)
-                predicted_file_content = remove_empty_lines(predicted_file_content)
+                # expected_file_content = remove_empty_lines(expected_file_content)
+                # predicted_file_content = remove_empty_lines(predicted_file_content)
 
                 if predicted_file_content == expected_file_content:
                     scores.append(1.0)
@@ -209,19 +220,35 @@ class SweFixerVerifier(BaseVerifier):
                         "failure_reason": "Syntax error"
                     })
                 
-                expected_file_regions, predicted_file_regions = self.exctract_code_regions(file_path, expected_workspace, predicted_workspace, model_patches)
+                # expected_file_regions, predicted_file_regions = self.exctract_code_regions(file_path, expected_workspace, predicted_workspace, model_patches)
+                golden_diff = self.get_diff(before=original_workspace[file_path], after=expected_file_content)
+                model_diff = self.get_diff(before=original_workspace[file_path], after=predicted_file_content)
                 # print left and right side by side
                 # print(predicted_file_regions)
                 # print("-"*100)
                 # print(expected_file_regions)
                 # print("="*100)
                 # print line count
-                # print(predicted_file_regions.count("\n"))
-                # print(expected_file_regions.count("\n"))
+                print("Line counts expected:")
+                print(len(expected_file_content.splitlines()))
+                print(len(golden_diff.splitlines()))
+                print("Delta: ", len(expected_file_content.splitlines()) - len(golden_diff.splitlines()))
+                print("Line counts predicted:")
+                print(len(predicted_file_content.splitlines()))
+                print(len(model_diff.splitlines()))
+                print("Delta: ", len(predicted_file_content.splitlines()) - len(model_diff.splitlines()))
+
+                # print("="*100)
+                # print(uni_diff)
+                # print("-"*100)
+                # print(model_diff)
+
                 score = cydifflib.SequenceMatcher(
                     None,
-                    a=predicted_file_regions,
-                    b=expected_file_regions,
+                    # a=predicted_file_content,
+                    # b=expected_file_content,
+                    a=model_diff,
+                    b=golden_diff,
                     autojunk=False,
                 ).ratio()
                 scores.append(score)
@@ -272,6 +299,10 @@ if __name__ == "__main__":
             to_verify.append(d)
     
     verifier = SweFixerVerifier()
+    import time
+    start_time = time.time()
     for item in to_verify:
         result = verifier.verify(item)
-        print(result)
+        # print(result)
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
