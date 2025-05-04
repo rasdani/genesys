@@ -23,13 +23,16 @@ def parse_json_codeblock_from_model_output(markdown_str):
     else:
         return answer_str.strip()
 
+
 def remove_line_numbers(content):
     return LINE_NUMBER_REGEX.sub("", content)
+
 
 def remove_empty_lines(code):
     lines = code.splitlines()
     filtered_lines = [line for line in lines if line.strip() != ""]
     return "\n".join(filtered_lines)
+
 
 def check_syntax(code):
     if not code.strip():
@@ -62,15 +65,12 @@ class SweFixerVerifier(BaseVerifier):
         dict[str, str]
             file-path -> patched file content
         """
-        workspace = {f["file"]: remove_line_numbers(f["file content"])
-                    for f in files_to_modify}
+        workspace = {f["file"]: remove_line_numbers(f["file content"]) for f in files_to_modify}
         failed_file_paths = []
 
         for patch in patches:
             file_path = patch["file"]
-            snippet_old = remove_line_numbers(
-                patch["code snippet to be modified"]
-            ).strip()
+            snippet_old = remove_line_numbers(patch["code snippet to be modified"]).strip()
             snippet_new = patch["edited code snippet"].strip()
 
             current = workspace.get(file_path, "")
@@ -81,7 +81,7 @@ class SweFixerVerifier(BaseVerifier):
                     failed_file_paths.append(file_path)
                     continue
                 current = current.replace(snippet_old, snippet_new)
-            elif current == "":           # brand-new file
+            elif current == "":  # brand-new file
                 current = snippet_new
             workspace[file_path] = current
 
@@ -93,7 +93,7 @@ class SweFixerVerifier(BaseVerifier):
         diff = cydifflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="")
         lines = list(diff)[2:]  # Keep relevant parts of the diff
         return "\n".join(lines)
-        
+
     def score_patching(self, verification_info, json_output):
         """
         Score how well the model's patches match the expected patches.
@@ -112,16 +112,14 @@ class SweFixerVerifier(BaseVerifier):
         try:
             model_patches = json.loads(json_output)
         except Exception as e:
-            return dict(score=0.0, verification_result_info={
-                "failure_reason": f"Error in parsing JSON output: {e}"
-            })
+            return dict(score=0.0, verification_result_info={"failure_reason": f"Error in parsing JSON output: {e}"})
 
         try:
             original_files = verification_info["input"]["files to be modified"]
             golden_patches = verification_info["output"]["edited code"]
 
             original_workspace = self.apply_patches(original_files, [])
-            golden_workspace  = self.apply_patches(original_files, golden_patches)
+            golden_workspace = self.apply_patches(original_files, golden_patches)
             predicted_workspace = self.apply_patches(original_files, model_patches)
             # predicted_workspace = self.apply_patches(original_files, golden_patches)
 
@@ -130,7 +128,7 @@ class SweFixerVerifier(BaseVerifier):
                 if predicted_workspace[file_path] is None:
                     scores.append(0.0)  # model failed to localize edit location
                     continue
-                golden_file_content  = golden_workspace[file_path]
+                golden_file_content = golden_workspace[file_path]
                 predicted_file_content = predicted_workspace.get(file_path, "")
 
                 if predicted_file_content == golden_file_content:
@@ -140,14 +138,12 @@ class SweFixerVerifier(BaseVerifier):
                 syntax_ok = check_syntax(predicted_file_content)
                 # syntax_ok_golden = check_syntax(golden_file_content)
                 if not syntax_ok:
-                    return dict(score=0.0, verification_result_info={
-                        "failure_reason": "Syntax error"
-                    })
+                    return dict(score=0.0, verification_result_info={"failure_reason": "Syntax error"})
                 # if not syntax_ok_golden:
                 #     return dict(score=0.0, verification_result_info={
                 #         "failure_reason": "Syntax error in golden patch"
                 #     })
-                
+
                 golden_diff = self.get_diff(before=original_workspace[file_path], after=golden_file_content)
                 model_diff = self.get_diff(before=original_workspace[file_path], after=predicted_file_content)
                 # print("Line counts expected:")
@@ -168,15 +164,13 @@ class SweFixerVerifier(BaseVerifier):
                     autojunk=False,
                 ).ratio()
                 scores.append(score)
-                
+
             return dict(score=sum(scores) / len(scores), verification_result_info=dict())
 
         except Exception as e:
             return dict(
                 score=0,
-                verification_result_info={
-                    "failure_reason": f"Error in scoring patches: {e}"
-                },
+                verification_result_info={"failure_reason": f"Error in scoring patches: {e}"},
             )
 
     def verify(self, result: Response):
@@ -192,8 +186,8 @@ class SweFixerVerifier(BaseVerifier):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Verify SWE-Fixer patches')
-    parser.add_argument('--file', type=str, required=True, help='Path to the input file containing patches to verify')
+    parser = argparse.ArgumentParser(description="Verify SWE-Fixer patches")
+    parser.add_argument("--file", type=str, required=True, help="Path to the input file containing patches to verify")
     args = parser.parse_args()
 
     to_verify = []
@@ -203,7 +197,7 @@ if __name__ == "__main__":
             d["verification_info"] = ast.literal_eval(d["verification_info"])
             d["metadata"] = ast.literal_eval(d["metadata"])
             to_verify.append(d)
-    
+
     verifier = SweFixerVerifier()
     for item in to_verify:
         result = verifier.verify(item)
