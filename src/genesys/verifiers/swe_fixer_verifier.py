@@ -163,8 +163,6 @@ class SweFixerVerifier(BaseVerifier):
 
                 score = cydifflib.SequenceMatcher(
                     None,
-                    # a=predicted_file_content,
-                    # b=expected_file_content,
                     a=model_diff,
                     b=golden_diff,
                     autojunk=False,
