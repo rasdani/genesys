@@ -85,7 +85,7 @@ class SweFixerVerifier(BaseVerifier):
                 current = snippet_new
             workspace[file_path] = current
 
-        # Set the workspace to None for files that failed to be patched
+        # Set the file content to None for files that failed to be patched
         workspace = {k: None if k in failed_file_paths else v for k, v in workspace.items()}
         return workspace
 
@@ -138,15 +138,15 @@ class SweFixerVerifier(BaseVerifier):
                     continue
 
                 syntax_ok = check_syntax(predicted_file_content)
-                syntax_ok_golden = check_syntax(golden_file_content)
+                # syntax_ok_golden = check_syntax(golden_file_content)
                 if not syntax_ok:
                     return dict(score=0.0, verification_result_info={
                         "failure_reason": "Syntax error"
                     })
-                if not syntax_ok_golden:
-                    return dict(score=0.0, verification_result_info={
-                        "failure_reason": "Syntax error in golden patch"
-                    })
+                # if not syntax_ok_golden:
+                #     return dict(score=0.0, verification_result_info={
+                #         "failure_reason": "Syntax error in golden patch"
+                #     })
                 
                 golden_diff = self.get_diff(before=original_workspace[file_path], after=golden_file_content)
                 model_diff = self.get_diff(before=original_workspace[file_path], after=predicted_file_content)
@@ -158,8 +158,8 @@ class SweFixerVerifier(BaseVerifier):
                 # print(len(predicted_file_content.splitlines()))
                 # print(len(model_diff.splitlines()))
                 # print("Delta: ", len(predicted_file_content.splitlines()) - len(model_diff.splitlines()))
-                print("MODEL DIFF:\n", model_diff)
-                print("GOLDEN DIFF:\n", golden_diff)
+                # print("MODEL DIFF:\n", model_diff)
+                # print("GOLDEN DIFF:\n", golden_diff)
 
                 score = cydifflib.SequenceMatcher(
                     None,
@@ -175,7 +175,7 @@ class SweFixerVerifier(BaseVerifier):
             return dict(
                 score=0,
                 verification_result_info={
-                    "failure_reason": f"Error in evaluating task code editing: {e}"
+                    "failure_reason": f"Error in scoring patches: {e}"
                 },
             )
 
@@ -183,7 +183,7 @@ class SweFixerVerifier(BaseVerifier):
         """
         Evaluates the code patches by comparing the model's patches against golden patches.
 
-        The score is either 0 or 1, representing whether the patches are correct.
+        The score lies between 0 and 1, representing the similarity between the model's patches and the golden patches.
         """
         print("Processing example: ", result["problem_id"])
         verification_info = result["verification_info"]
