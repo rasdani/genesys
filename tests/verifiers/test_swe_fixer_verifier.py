@@ -4,7 +4,7 @@ from genesys.verifiers.registry import SweFixerVerifier
 
 def test_swe_fixer_end_to_end_complex():
     """
-    End-to-end check of SweFixerVerifier with two files and tricky indentation.
+    End-to-end check of SweFixerVerifier with two files and wrong indentation.
     The first patch fixes an indentation bug inside an `if`; the second renames
     a variable and tweaks the greeting text.
     """
@@ -18,7 +18,7 @@ def test_swe_fixer_end_to_end_complex():
                 "3 \n"
                 "4 def divide(a, b):\n"
                 "5     if b == 0:\n"
-                "6     return None\n"            # bad – missing nested indent
+                "6     return None\n"            # missing indent needs to be fixed
                 "7     return a / b\n"
             ),
         },
@@ -49,7 +49,7 @@ def test_swe_fixer_end_to_end_complex():
             "edited code snippet": (
                 "def divide(a, b):\n"
                 "    if b == 0:\n"
-                "        return None\n"
+                "        return None\n"         # fixed missing indent
                 "    return a / b"
             ),
         },
@@ -62,13 +62,13 @@ def test_swe_fixer_end_to_end_complex():
             ),
             "edited code snippet": (
                 "def greet(name):\n"
-                "    msg = f\"Hello, {name}!\"\n"
+                "    msg = f\"Hello, {name}!\"\n"  # fixed variable name and greeting text
                 "    print(msg)"
             ),
         },
     ]
 
-    wrong_patches = [
+    wrong_patch = [
         {
             "file": "utils/math_ops.py",
             "code snippet to be modified": (
@@ -96,9 +96,9 @@ def test_swe_fixer_end_to_end_complex():
                 "7     return a / b"
             ),
             "edited code snippet": (
-                "def divide_two_numbers(a, b):\n"
+                "def divide_two_numbers(a, b):\n"    # wrong function name
                 "    if b == 0:\n"
-                "        return 0\n"
+                "        return 0\n"                # wrong return value
                 "    return a / b"
             ),
         },
@@ -110,8 +110,8 @@ def test_swe_fixer_end_to_end_complex():
                 "5     print(message)"
             ),
             "edited code snippet": (
-                "def greet_by_name(name):\n"
-                "    message = f\"Hello, {name}!\"\n"
+                "def greet_by_name(name):\n"        # wrong function name
+                "    message = f\"Hello, {name}!\"\n" # wrong variable name
                 "    print(message)"
             ),
         },
@@ -125,17 +125,17 @@ def test_swe_fixer_end_to_end_complex():
 
     verifier = SweFixerVerifier()
     result_correct = {
-        "problem_id": "test_swe_fixer_end_to_end_complex",
+        "problem_id": "test_swe_fixer_correct",
         "verification_info": verification_info,
         "llm_response": json.dumps(correct_patches),
     }
     result_wrong = {
-        "problem_id": "test_swe_fixer_end_to_end_complex",
+        "problem_id": "test_swe_fixer_wrong",
         "verification_info": verification_info,
-        "llm_response": json.dumps(wrong_patches),
+        "llm_response": json.dumps(wrong_patch),
     }
     result_slightly_wrong = {
-        "problem_id": "test_swe_fixer_end_to_end_complex",
+        "problem_id": "test_swe_fixer_slightly_wrong",
         "verification_info": verification_info,
         "llm_response": json.dumps(slightly_wrong_patches),
     }
@@ -145,4 +145,4 @@ def test_swe_fixer_end_to_end_complex():
 
     assert score_dict_correct["score"] == 1.0, f"unexpected verifier score: {score_dict_correct}"
     assert score_dict_wrong["score"] == 0.0, f"unexpected verifier score: {score_dict_wrong}"
-    assert 0 < score_dict_slightly_wrong["score"] < 1.0, f"unexpected verifier score: {score_dict_slightly_wrong}"
+    assert 0.5 < score_dict_slightly_wrong["score"] < 1.0, f"unexpected verifier score: {score_dict_slightly_wrong}"  # 0.9334
