@@ -3,7 +3,7 @@ from genesys.verifiers.math_verifier import MathVerifier
 from genesys.verifiers.llm_judge_verifier import LlmJudgeVerifier
 from genesys.verifiers.code_output_prediction_verifier import CodeUnderstandingVerifier
 from genesys.verifiers.reasoning_gym_verifier import ReasoningGymVerifier
-from genesys.verifiers.swe_fixer_verfier import SweFixerVerifier
+from genesys.verifiers.swe_fixer_verifier import SweFixerVerifier
 
 VERIFIER_REGISTRY = {
     "verifiable_code": CodeVerifier,
