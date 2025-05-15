@@ -17,20 +17,22 @@ async_client = AsyncOpenAI(
 class Config:
     def __init__(self):
         # Model parameters
-        self.model_name = "deepseek-ai/DeepSeek-R1"
+        # self.model_name = "deepseek-ai/DeepSeek-R1"
+        self.model_name = "mistralai/Mistral-7B-Instruct-v0.2"
         # self.temperature = 0.6
         # self.top_p = 0.95
-        self.max_tokens = 32768
+        # self.max_tokens = 32768
         
         # Data parameters
-        self.dataset_path = "rasdani/swe-fixer-70k"
-        self.max_samples = 30
+        # self.dataset_path = "rasdani/swe-fixer-70k"
+        self.dataset_path = "rasdani/ifeval-genesys-debug"
+        self.max_samples = 48
         self.batch_size = 1
         self.num_responses_per_question = 1
         
         # Output parameters
         self.out_file_prefix = "out"
-        self.path_output = "output/batched_30"
+        self.path_output = "output/ifeval_48"
         self.sample_per_file = 5
 
 def save_batch_results(results, file_path):
@@ -49,14 +51,17 @@ def save_batch_results(results, file_path):
 
 async def async_gather_generate_responses(async_client, dataset, config):
     """Generate responses for examples in the dataset using async/await pattern."""
-    # Empty the output directory
-    for file in os.listdir(config.path_output):
-        os.remove(os.path.join(config.path_output, file))
+    # Empty the output directory if it exists, or create it if not present
+    if os.path.exists(config.path_output):
+        for file in os.listdir(config.path_output):
+            os.remove(os.path.join(config.path_output, file))
+    else:
+        os.makedirs(config.path_output)
     all_results = []
     total_samples = 0
-    sampling_params = {
-        "max_tokens": config.max_tokens
-    }
+    # sampling_params = {
+    #     "max_tokens": config.max_tokens
+    # }
     
     async def process_example(example):
         """Process a single example asynchronously."""
@@ -70,7 +75,7 @@ async def async_gather_generate_responses(async_client, dataset, config):
             response = await async_client.chat.completions.create(
                 model=config.model_name,
                 messages=messages,
-                max_tokens=sampling_params["max_tokens"]
+                # max_tokens=sampling_params["max_tokens"]
             )
             llm_response = response.choices[0].message.content
         except Exception as e:
@@ -81,9 +86,9 @@ async def async_gather_generate_responses(async_client, dataset, config):
         
         print(f"Example {example['problem_id']} completed")
         metadata = example.get("metadata", "{}")
-        metadata = ast.literal_eval(metadata)
-        metadata["model"] = config.model_name
-        metadata["prompt"] = example["prompt"]
+        # metadata = ast.literal_eval(metadata)
+        # metadata["model"] = config.model_name
+        # metadata["prompt"] = example["prompt"]
         
         example["metadata"] = metadata
         example["llm_response"] = llm_response

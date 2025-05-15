@@ -16,7 +16,8 @@ dependencies = [
     "docker>=7.1.0",
     "pynvml>=12.0.0",
     "toploc>=0.0.2",
-    "reasoning-gym>=0.1.18"
+    "reasoning-gym>=0.1.18",
+    "langdetect>=1.0.9",
 ]
 
 [project.optional-dependencies]
