@@ -542,26 +542,4 @@ class IFEvalVerifier(BaseVerifier):
         except Exception as e:
             failure_reason = f"IFEval function {func_name} failed with error: {e}"
             score = 0.0
-        print(f"Score: {score}")
         return dict(score=score, verification_result_info={"failure_reason": failure_reason})
-
-if __name__ == "__main__":
-    import argparse
-    import ast
-
-    parser = argparse.ArgumentParser(description='Verify SWE-Fixer patches')
-    parser.add_argument('--file', type=str, required=True, help='Path to the input file containing patches to verify')
-    args = parser.parse_args()
-
-    to_verify = []
-    with open(args.file, "r") as f:
-        for line in f:
-            d = json.loads(line)
-            d["verification_info"] = ast.literal_eval(d["verification_info"])
-            # d["metadata"] = ast.literal_eval(d["metadata"])
-            to_verify.append(d)
-    
-    verifier = IFEvalVerifier()
-    for item in to_verify:
-        result = verifier.verify(item)
-        # print(result)
