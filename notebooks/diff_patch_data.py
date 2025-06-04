@@ -6,7 +6,18 @@ import tempfile
 from pathlib import Path
 from datasets import load_dataset
 from tqdm.auto import tqdm
+from typing import Optional, Dict
+import requests
 
+
+REMOVE_INDEX_REGEX = re.compile(r'diff --git.*?\nindex [a-f0-9]+\.\.[a-f0-9]+ \d+\n', re.DOTALL)
+
+def normalize_diff(diff, tmp_dir=None):
+    # Remove index lines completely (they appear as separate lines)
+    diff = re.sub(r'^index [a-f0-9]+\.\.[a-f0-9]+ \d+$', '', diff, flags=re.MULTILINE)
+    if tmp_dir:
+        diff = re.sub(re.escape(str(tmp_dir)) + r'/[ab]', '', diff)
+    return diff
 
 def remove_line_numbers(content):
     """Remove line numbers from the beginning of each line."""
@@ -86,8 +97,7 @@ def generate_workspace_git_diff(original_workspace, modified_workspace):
         
         # Remove index lines and clean tmp paths using regex
         diff_output = result.stdout
-        diff_output = re.sub(r'diff --git.*?\nindex [a-f0-9]+\.\.[a-f0-9]+ \d+\n', lambda m: m.group(0).split('\nindex')[0] + '\n', diff_output, flags=re.DOTALL)
-        diff_output = re.sub(re.escape(str(tmpdir)) + r'/[ab]', '', diff_output)
+        diff_output = normalize_diff(diff_output, tmpdir)
         
         return diff_output
 
@@ -112,12 +122,18 @@ def preprocess_dataset(dataset):
             workspace_diff = generate_workspace_git_diff(original_workspace, golden_workspace)
             
             # Store preprocessed data
+            # preprocessed.append({
+            #     "problem_id": example["problem_id"],
+            #     "original_files": original_workspace,
+            #     "golden_files": golden_workspace,
+            #     "golden_diff": workspace_diff,
+            #     "metadata": example.get("metadata", {})
+            # })
             preprocessed.append({
-                "problem_id": example["problem_id"],
+                **example,
                 "original_files": original_workspace,
                 "golden_files": golden_workspace,
                 "golden_diff": workspace_diff,
-                "metadata": example.get("metadata", {})
             })
             
         except Exception as e:
@@ -142,6 +158,155 @@ def load_preprocessed_data(file_path="preprocessed_swe_fixer.jsonl"):
             data.append(json.loads(line))
     return data
 
+def extract_pr_info(in_source_id: str) -> Optional[Dict[str, str]]:
+    """Extract GitHub PR information from in_source_id."""
+    if not in_source_id:
+        return None
+    
+    # Handle format like "python-gitlab__python-gitlab-642"
+    # This maps to https://github.com/python-gitlab/python-gitlab/pull/642
+    if "__" in in_source_id:
+        parts = in_source_id.split("__")
+        if len(parts) == 2:
+            owner = parts[0]
+            repo_pr = parts[1]
+            
+            # Extract repo name and PR number
+            # Format: repo-name-PRNUMBER
+            match = re.match(r"(.+)-(\d+)$", repo_pr)
+            if match:
+                repo_name = match.group(1)
+                pr_number = match.group(2)
+                
+                repo = f"{owner}/{repo_name}"
+                pr_url = f"https://github.com/{repo}/pull/{pr_number}"
+                
+                return {
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url
+                }
+    
+    return None
+
+
+def fetch_pr_diff(repo: str, pr_number: str, github_token: Optional[str] = None) -> Optional[str]:
+    """Fetch the actual diff from a GitHub PR."""
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+    
+    headers = {"Accept": "application/vnd.github.v3.diff"}
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        print(f"Error fetching PR diff for {repo}#{pr_number}: {e}")
+        return None
+
+
+
+def extract_files_from_diff(diff: str) -> set:
+    """Extract file paths from a git diff."""
+    files = set()
+    for line in diff.split('\n'):
+        if line.startswith('diff --git'):
+            # Extract file path from "diff --git a/path b/path"
+            parts = line.split()
+            if len(parts) >= 4:
+                # Take the path after "a/" 
+                file_path = parts[2]
+                if file_path.startswith('a/'):
+                    file_path = file_path[2:]
+                files.add(file_path)
+    return files
+
+
+def filter_diff_by_files(diff: str, allowed_files: set) -> str:
+    """Filter a git diff to only include changes for specific files."""
+    if not allowed_files:
+        return diff
+    
+    lines = diff.split('\n')
+    filtered_lines = []
+    include_section = False
+    
+    for line in lines:
+        if line.startswith('diff --git'):
+            # Check if this file should be included
+            parts = line.split()
+            if len(parts) >= 4:
+                file_path = parts[2]
+                if file_path.startswith('a/'):
+                    file_path = file_path[2:]
+                include_section = file_path in allowed_files
+            else:
+                include_section = False
+        
+        if include_section:
+            filtered_lines.append(line)
+    
+    return '\n'.join(filtered_lines)
+
+
+def compare_diffs(golden_diff: str, github_diff: str) -> float:
+    """Compare two diffs and return a similarity score."""
+    # Extract files from golden diff and filter github diff to only include those files
+    golden_files = extract_files_from_diff(golden_diff)
+    github_diff = filter_diff_by_files(github_diff, golden_files)
+    
+    # Normalize both diffs to remove index lines and clean up formatting
+    golden_diff = normalize_diff(golden_diff)
+    github_diff = normalize_diff(github_diff)
+    
+    if golden_diff == github_diff:
+        return 1.0
+    
+    # Calculate line-based similarity
+    golden_lines = set(golden_diff.split('\n'))
+    github_lines = set(github_diff.split('\n'))
+    
+    if not golden_lines and not github_lines:
+        return 1.0
+    if not golden_lines or not github_lines:
+        return 0.0
+    
+    intersection = len(golden_lines & github_lines)
+    union = len(golden_lines | github_lines)
+    
+    return intersection / union if union > 0 else 0.0
+
+def validate_against_pr(example: dict, golden_diff: str, 
+                       github_token: Optional[str] = None) -> dict:
+    """Validate golden patches against actual GitHub PR."""
+    pr_info = extract_pr_info(example.get("in_source_id"))
+    if not pr_info:
+        return {"status": "no_pr_info"}
+    
+    # Fetch actual PR diff
+    pr_diff_text = fetch_pr_diff(pr_info["repo"], pr_info["pr_number"], github_token)
+    if not pr_diff_text:
+        return {"status": "fetch_failed", "pr_info": pr_info}
+    
+    
+    # Compare whole unified diff
+    score = compare_diffs(golden_diff, pr_diff_text)
+    print(score)
+    if score == 1.0:
+        return {"status": "validated", "pr_info": pr_info, "score": score}
+    
+    # Check for files in PR but not in golden
+    extra_files = set(pr_diff_text.split('\n')) - set(golden_diff.split('\n'))
+    
+    return {
+        "status": "validated",
+        "pr_info": pr_info,
+        "avg_similarity": score,
+        "extra_files_in_pr": list(extra_files),
+        "perfect_match": score == 1.0 and not extra_files
+    }
 
 # Example usage in notebook:
 if __name__ == "__main__":
@@ -162,4 +327,7 @@ if __name__ == "__main__":
         print(f"Files modified: {list(example['golden_files'].keys())}")
         print(f"\nWorkspace diff:")
         print(example['golden_diff'][:500] + "...")
+    
+    for example in preprocessed:
+        validate_against_pr(example, example['golden_diff'])
     breakpoint()
