@@ -207,6 +207,88 @@ def fetch_pr_diff(repo: str, pr_number: str, github_token: Optional[str] = None)
         print(f"Error fetching PR diff for {repo}#{pr_number}: {e}")
         return None
 
+def fetch_pr_details(repo: str, pr_number: str, github_token: Optional[str] = None) -> Optional[dict]:
+    """Fetch PR details including base and head commits."""
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+    
+    headers = {}
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error fetching PR details for {repo}#{pr_number}: {e}")
+        return None
+
+def fetch_file_content(repo: str, file_path: str, ref: str, github_token: Optional[str] = None) -> Optional[str]:
+    """Fetch file content at a specific commit."""
+    url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+    
+    headers = {}
+    if github_token:
+        headers["Authorization"] = f"token {github_token}"
+    
+    params = {"ref": ref}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        
+        content_data = response.json()
+        if content_data.get("encoding") == "base64":
+            import base64
+            return base64.b64decode(content_data["content"]).decode('utf-8')
+        else:
+            return content_data.get("content", "")
+    except Exception as e:
+        print(f"Error fetching file {file_path} at {ref} for {repo}: {e}")
+        return None
+
+def generate_pr_diff_from_files(repo: str, pr_number: str, allowed_files: set, 
+                               github_token: Optional[str] = None) -> Optional[str]:
+    """Generate diff by fetching actual file contents before/after PR."""
+    # Get PR details
+    pr_details = fetch_pr_details(repo, pr_number, github_token)
+    if not pr_details:
+        return None
+    
+    base_sha = pr_details["base"]["sha"]
+    head_sha = pr_details["head"]["sha"]
+    
+    print(f"Base commit: {base_sha}")
+    print(f"Head commit: {head_sha}")
+    
+    # Create temporary workspace with before/after files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        before_dir = Path(tmpdir) / "a"
+        after_dir = Path(tmpdir) / "b"
+        
+        for file_path in allowed_files:
+            # Fetch before content
+            before_content = fetch_file_content(repo, file_path, base_sha, github_token)
+            if before_content is not None:
+                before_file = before_dir / file_path
+                before_file.parent.mkdir(parents=True, exist_ok=True)
+                before_file.write_text(before_content)
+            
+            # Fetch after content
+            after_content = fetch_file_content(repo, file_path, head_sha, github_token)
+            if after_content is not None:
+                after_file = after_dir / file_path
+                after_file.parent.mkdir(parents=True, exist_ok=True)
+                after_file.write_text(after_content)
+        
+        # Generate diff
+        result = subprocess.run(
+            ["git", "diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", str(before_dir), str(after_dir)],
+            capture_output=True, text=True
+        )
+        
+        return normalize_diff(result.stdout, tmpdir)
+
 
 
 def extract_files_from_diff(diff: str) -> set:
@@ -267,16 +349,28 @@ def create_diff_comparison(golden_diff: str, github_diff: str) -> str:
     
     return ''.join(diff)
 
-def compare_diffs(golden_diff: str, github_diff: str) -> float:
+def compare_diffs(golden_diff: str, github_diff: str, repo: str = None, pr_number: str = None, 
+                 github_token: Optional[str] = None, use_file_fetch: bool = True) -> float:
     """Compare two diffs and return a similarity score."""
-    # Extract files from golden diff and filter github diff to only include those files
+    # Extract files from golden diff
     golden_files = extract_files_from_diff(golden_diff)
     
-    github_diff_filtered = filter_diff_by_files(github_diff, golden_files)
+    if use_file_fetch and repo and pr_number:
+        # Generate diff from actual file contents
+        print("Generating diff from actual file contents...")
+        github_diff_from_files = generate_pr_diff_from_files(repo, pr_number, golden_files, github_token)
+        if github_diff_from_files:
+            github_diff_to_compare = github_diff_from_files
+        else:
+            print("Failed to fetch files, falling back to API diff")
+            github_diff_to_compare = filter_diff_by_files(github_diff, golden_files)
+    else:
+        # Use filtered API diff
+        github_diff_to_compare = filter_diff_by_files(github_diff, golden_files)
     
     # Normalize both diffs to remove index lines and clean up formatting
     golden_diff_normalized = normalize_diff(golden_diff)
-    github_diff_normalized = normalize_diff(github_diff_filtered)
+    github_diff_normalized = normalize_diff(github_diff_to_compare)
     
     # Show the diff between the two patches
     diff_comparison = create_diff_comparison(golden_diff_normalized, github_diff_normalized)
@@ -313,8 +407,14 @@ def validate_against_pr(example: dict, golden_diff: str,
         return {"status": "fetch_failed", "pr_info": pr_info}
     
     
-    # Compare whole unified diff
-    score = compare_diffs(golden_diff, pr_diff_text)
+    # Compare whole unified diff (using file content fetching for accurate comparison)
+    score = compare_diffs(
+        golden_diff, 
+        pr_diff_text, 
+        repo=pr_info["repo"], 
+        pr_number=pr_info["pr_number"], 
+        github_token=github_token
+    )
     print(score)
     if score == 1.0:
         return {"status": "validated", "pr_info": pr_info, "score": score}
@@ -336,7 +436,7 @@ def validate_against_pr(example: dict, golden_diff: str,
 if __name__ == "__main__":
     # Load dataset
     dataset = load_dataset("rasdani/swe-fixer-70k", split="train")
-    dataset = dataset.select([1])
+    dataset = dataset.select(range(10))
     
     # Preprocess (use limit for testing)
     preprocessed = preprocess_dataset(dataset)
