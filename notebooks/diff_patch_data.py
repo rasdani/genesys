@@ -8,13 +8,14 @@ from datasets import load_dataset
 from tqdm.auto import tqdm
 from typing import Optional, Dict
 import requests
+import difflib
 
 
 REMOVE_INDEX_REGEX = re.compile(r'diff --git.*?\nindex [a-f0-9]+\.\.[a-f0-9]+ \d+\n', re.DOTALL)
 
 def normalize_diff(diff, tmp_dir=None):
     # Remove index lines completely (they appear as separate lines)
-    diff = re.sub(r'^index [a-f0-9]+\.\.[a-f0-9]+ \d+$', '', diff, flags=re.MULTILINE)
+    diff = re.sub(r'^index [a-f0-9]+\.\.[a-f0-9]+ \d+\n', '', diff, flags=re.MULTILINE)
     if tmp_dir:
         diff = re.sub(re.escape(str(tmp_dir)) + r'/[ab]', '', diff)
     return diff
@@ -251,22 +252,43 @@ def filter_diff_by_files(diff: str, allowed_files: set) -> str:
     return '\n'.join(filtered_lines)
 
 
+def create_diff_comparison(golden_diff: str, github_diff: str) -> str:
+    """Create a detailed diff comparison between golden and github diffs."""
+    golden_lines = golden_diff.splitlines(keepends=True)
+    github_lines = github_diff.splitlines(keepends=True)
+    
+    diff = difflib.unified_diff(
+        golden_lines,
+        github_lines,
+        fromfile="golden_diff",
+        tofile="github_diff",
+        lineterm=""
+    )
+    
+    return ''.join(diff)
+
 def compare_diffs(golden_diff: str, github_diff: str) -> float:
     """Compare two diffs and return a similarity score."""
     # Extract files from golden diff and filter github diff to only include those files
     golden_files = extract_files_from_diff(golden_diff)
-    github_diff = filter_diff_by_files(github_diff, golden_files)
+    
+    github_diff_filtered = filter_diff_by_files(github_diff, golden_files)
     
     # Normalize both diffs to remove index lines and clean up formatting
-    golden_diff = normalize_diff(golden_diff)
-    github_diff = normalize_diff(github_diff)
+    golden_diff_normalized = normalize_diff(golden_diff)
+    github_diff_normalized = normalize_diff(github_diff_filtered)
     
-    if golden_diff == github_diff:
+    # Show the diff between the two patches
+    diff_comparison = create_diff_comparison(golden_diff_normalized, github_diff_normalized)
+    print(f"Diff between golden and github patches:")
+    print(diff_comparison)
+    
+    if golden_diff_normalized == github_diff_normalized:
         return 1.0
     
     # Calculate line-based similarity
-    golden_lines = set(golden_diff.split('\n'))
-    github_lines = set(github_diff.split('\n'))
+    golden_lines = set(golden_diff_normalized.split('\n'))
+    github_lines = set(github_diff_normalized.split('\n'))
     
     if not golden_lines and not github_lines:
         return 1.0
@@ -296,6 +318,8 @@ def validate_against_pr(example: dict, golden_diff: str,
     print(score)
     if score == 1.0:
         return {"status": "validated", "pr_info": pr_info, "score": score}
+    else:
+        breakpoint()
     
     # Check for files in PR but not in golden
     extra_files = set(pr_diff_text.split('\n')) - set(golden_diff.split('\n'))
@@ -312,7 +336,7 @@ def validate_against_pr(example: dict, golden_diff: str,
 if __name__ == "__main__":
     # Load dataset
     dataset = load_dataset("rasdani/swe-fixer-70k", split="train")
-    dataset = dataset.select(range(10))
+    dataset = dataset.select([1])
     
     # Preprocess (use limit for testing)
     preprocessed = preprocess_dataset(dataset)
@@ -323,10 +347,10 @@ if __name__ == "__main__":
     # Example: inspect first example
     if preprocessed:
         example = preprocessed[0]
-        print(f"Problem ID: {example['problem_id']}")
-        print(f"Files modified: {list(example['golden_files'].keys())}")
-        print(f"\nWorkspace diff:")
-        print(example['golden_diff'][:500] + "...")
+        # print(f"Problem ID: {example['problem_id']}")
+        # print(f"Files modified: {list(example['golden_files'].keys())}")
+        # print(f"\nWorkspace diff:")
+        # print(example['golden_diff'][:500] + "...")
     
     for example in preprocessed:
         validate_against_pr(example, example['golden_diff'])
